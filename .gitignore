@@ -1,0 +1,12 @@
+*_plan.md
+plan.md
+.env
+.cache/
+db.sqlite
+*.sqlite
+personas/people.yaml
+__pycache__/
+.pytest_cache/
+.mypy_cache/
+.venv/
+scripts/temp.txt
