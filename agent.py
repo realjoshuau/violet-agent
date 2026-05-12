@@ -23,6 +23,8 @@ DEPTH_TOKEN_LIMITS = {
     "valorant": 350,
 }
 
+REPEAT_WINDOW = 3
+
 
 @dataclass
 class Attachment:
@@ -41,6 +43,8 @@ class AgentRequest:
     guild_id: str
     server_name: str
     is_dm: bool = False
+    context_snapshot: list[dict[str, Any]] | None = None
+    repetition_instruction: str = ""
 
 
 @dataclass
@@ -89,8 +93,13 @@ class VioletAgent:
         return decision == "yes"
 
     async def generate(self, request: AgentRequest) -> AgentResponse:
-        depth = await self._classify_depth(request.context_key)
-        messages = self._build_messages(request, depth)
+        snapshot = (
+            request.context_snapshot
+            if request.context_snapshot is not None
+            else self.memory.get_snapshot(request.context_key)
+        )
+        depth = await self._classify_depth(request.context_key, snapshot)
+        messages = self._build_messages(request, depth, snapshot)
         attachments: list[Attachment] = []
 
         response = await self._chat(messages, tools=TOOL_DEFINITIONS, max_tokens=self._max_tokens(depth))
@@ -100,13 +109,6 @@ class VioletAgent:
             tool_calls = self._tool_calls(message)
             if not tool_calls:
                 text = self._message_content(message)
-                self.memory.append(
-                    key=request.context_key,
-                    channel=request.channel_name,
-                    author="Violet",
-                    author_id="assistant",
-                    content=text,
-                )
                 return AgentResponse(text=text, attachments=attachments)
 
             messages.append(self._normalise_message(message))
@@ -126,17 +128,12 @@ class VioletAgent:
             self._log_model_response("tool_followup", response)
 
         text = "Tool loop limit reached. Narrow the request."
-        self.memory.append(
-            key=request.context_key,
-            channel=request.channel_name,
-            author="Violet",
-            author_id="assistant",
-            content=text,
-        )
         return AgentResponse(text=text, attachments=attachments)
 
-    async def _classify_depth(self, context_key: str) -> str:
-        history = self._history_text(context_key, limit=12)
+    async def _classify_depth(
+        self, context_key: str, snapshot: list[dict[str, Any]] | None = None
+    ) -> str:
+        history = self._history_text(context_key, limit=12, snapshot=snapshot)
         messages = [
             {
                 "role": "user",
@@ -247,18 +244,29 @@ Violet: ```json
             print(f"Failed to parse relevance classifier response as JSON: {value}")
             return "no"
 
-    def _build_messages(self, request: AgentRequest, depth: str) -> list[dict[str, Any]]:
+    def _build_messages(
+        self,
+        request: AgentRequest,
+        depth: str,
+        snapshot: list[dict[str, Any]] | None = None,
+    ) -> list[dict[str, Any]]:
         system = self._system_prompt(request, depth)
         messages: list[dict[str, Any]] = [{"role": "system", "content": system}]
-        for entry in self.memory.window(request.context_key):
-            role = "assistant" if entry.get("author_id") == "assistant" else "user"
+        entries = snapshot if snapshot is not None else self.memory.window(request.context_key)
+        for entry in entries:
+            role = str(entry.get("role") or "")
+            if role not in {"user", "assistant", "tool", "system"}:
+                role = "assistant" if entry.get("author_id") == "assistant" else "user"
+            content = str(entry.get("content") or "")
+            if role == "user":
+                content = (
+                    f"[#{entry.get('channel')}] {entry.get('author')}: "
+                    f"{entry.get('content')}"
+                )
             messages.append(
                 {
                     "role": role,
-                    "content": (
-                        f"[#{entry.get('channel')}] {entry.get('author')}: "
-                        f"{entry.get('content')}"
-                    ),
+                    "content": content,
                 }
             )
         return messages
@@ -280,6 +288,9 @@ Personality:
 - Use markdown formatting when appropriate, but don't overuse it. Don't use it for simple one-line responses.
 - instead of using emojis, use kawaii emoticons like this: (✿◠‿◠)
 - People might be shocked that you can respond! Please try not to make the conversation about you unless it's relevant to the question or request (or the current context is about you...)
+- Never repeat a response you have already sent. If you have nothing new to add, stay silent.
+- Do not use your previous responses as the topic of the current response.
+{request.repetition_instruction}
 
 (If you were called, respond. If you weren't called, but the message is clearly for you, respond. Otherwise, don't respond.)
 
@@ -408,12 +419,37 @@ Do not include [#<channel>] or Author: in your response - those are just part of
             kwargs["tools"] = tools
         return await self.llm_client.chat(**kwargs)
 
-    def _history_text(self, context_key: str, limit: int) -> str:
-        entries = self.memory.window(context_key)[-limit:]
+    def _history_text(
+        self,
+        context_key: str,
+        limit: int,
+        snapshot: list[dict[str, Any]] | None = None,
+    ) -> str:
+        entries = (snapshot if snapshot is not None else self.memory.window(context_key))[-limit:]
         return "\n".join(
-            f"[#{entry.get('channel')}] {entry.get('author')}: {entry.get('content')}"
+            str(entry.get("content") or "")
+            if entry.get("role") == "assistant"
+            else f"[#{entry.get('channel')}] {entry.get('author')}: {entry.get('content')}"
             for entry in entries
         )
+
+    def is_repeating_response(self, context_key: str, new_response: str) -> bool:
+        normalized_new = self._normalize_for_repeat_check(new_response)
+        if not normalized_new:
+            return False
+        recent = [
+            self._normalize_for_repeat_check(response)
+            for response in self.memory.get_recent_assistant(context_key, REPEAT_WINDOW)
+        ]
+        if len(recent) < REPEAT_WINDOW:
+            return False
+        return all(response == normalized_new for response in recent)
+
+    @staticmethod
+    def _normalize_for_repeat_check(text: str) -> str:
+        return "".join(
+            char for char in text.lower().strip() if char.isalnum() or char.isspace()
+        ).strip()
 
     @staticmethod
     def _max_tokens(depth: str) -> int:

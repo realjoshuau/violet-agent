@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import io
 import logging
+from collections import defaultdict
 
 from agent import AgentRequest, VioletAgent
 from config import settings
@@ -42,29 +43,17 @@ def build_client():
     memory = MemoryStore(db, settings.context_token_budget)
     people = PeopleStore.load(settings.people_path)
     violet = VioletAgent(memory=memory, people=people, db=db, config=settings)
+    server_queues = defaultdict(asyncio.Queue)
+    active_workers: set[str] = set()
+    worker_lock = asyncio.Lock()
 
     @client.event
     async def on_ready():
         guild_names = ", ".join(guild.name for guild in client.guilds)
         log.info("Connected as %s. Guilds: %s", client.user, guild_names or "none")
 
-    @client.event
-    async def on_message(message):
-        if message.author.bot:
-            return
-
-        is_dm = isinstance(message.channel, discord.DMChannel)
+    async def handle_message(message, is_dm: bool) -> None:
         author_id = str(message.author.id)
-
-        if is_dm and int(author_id) != settings.owner_discord_id:
-            if settings.reply_to_rejected_dm:
-                await message.channel.send("Not for you.")
-            return
-        
-        # Check guild ID in whitelist
-        if not is_dm and str(message.guild.id) not in ["1461988127613653004", "797198703067660308"]:
-            print(f"Rejected message from guild {message.guild.id} ({message.guild.name}) - {message.content}")
-            return
 
         context_key = (
             context_key_for_dm(author_id)
@@ -97,6 +86,7 @@ def build_client():
         
 
         async with message.channel.typing():
+            snapshot = memory.get_snapshot(context_key)
             response = await violet.generate(
                 AgentRequest(
                     content=message.content,
@@ -107,9 +97,34 @@ def build_client():
                     guild_id=guild_id,
                     server_name=server_name,
                     is_dm=is_dm,
+                    context_snapshot=snapshot,
                 )
             )
+            if violet.is_repeating_response(context_key, response.text):
+                print(f"Detected repeated response for {context_key}; retrying once with anti-repeat instruction")
+                response = await violet.generate(
+                    AgentRequest(
+                        content=message.content,
+                        author_name=message.author.display_name,
+                        author_id=author_id,
+                        context_key=context_key,
+                        channel_name=channel_name,
+                        guild_id=guild_id,
+                        server_name=server_name,
+                        is_dm=is_dm,
+                        context_snapshot=snapshot,
+                        repetition_instruction=(
+                            "Your last several responses were identical. "
+                            "Either respond meaningfully to the most recent message or stay silent. "
+                            "Reply with [SKIP] if staying silent is correct."
+                        ),
+                    )
+                )
             print(f"Generated response: {response.text} with {len(response.attachments)} attachment(s) to {message.author.display_name} in channel {channel_name} (guild: {server_name})")
+
+        if response.text.strip().lower() == "[skip]":
+            print(f"Skipping response to {message.author.display_name} in channel {channel_name} (guild: {server_name})")
+            return
 
         files = [
             discord.File(
@@ -122,9 +137,62 @@ def build_client():
         #message.channel.send(response.text or None, files=files)
         if response.text or files:
             await message.reply(content=response.text, files=files, mention_author=False)
+            if response.text:
+                memory.append_assistant(
+                    key=context_key,
+                    channel=channel_name,
+                    content=response.text,
+                )
         else:
             print(f"No content or attachments to send in response to {message.author.display_name} in channel {channel_name} (guild: {server_name})")
         #await message.reply(content=response.text or "", files=files)
+
+    async def guild_worker(context_key: str) -> None:
+        queue = server_queues[context_key]
+        while True:
+            message = await queue.get()
+            try:
+                await handle_message(message, is_dm=False)
+            except Exception:
+                log.exception("Failed to process queued guild message for context %s", context_key)
+            finally:
+                queue.task_done()
+
+            await asyncio.sleep(0.5)
+
+            async with worker_lock:
+                if queue.empty():
+                    active_workers.discard(context_key)
+                    return
+
+    @client.event
+    async def on_message(message):
+        if message.author.bot:
+            return
+
+        is_dm = isinstance(message.channel, discord.DMChannel)
+        author_id = str(message.author.id)
+
+        if is_dm and int(author_id) != settings.owner_discord_id:
+            if settings.reply_to_rejected_dm:
+                await message.channel.send("Not for you.")
+            return
+
+        # Check guild ID in whitelist
+        if not is_dm and str(message.guild.id) not in ["1461988127613653004", "797198703067660308"]:
+            print(f"Rejected message from guild {message.guild.id} ({message.guild.name}) - {message.content}")
+            return
+
+        if is_dm:
+            await handle_message(message, is_dm=True)
+            return
+
+        context_key = context_key_for_guild(message.guild.id)
+        async with worker_lock:
+            await server_queues[context_key].put(message)
+            if context_key not in active_workers:
+                active_workers.add(context_key)
+                asyncio.create_task(guild_worker(context_key))
 
     return client
 

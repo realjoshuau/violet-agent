@@ -80,7 +80,14 @@ class AgentTest(unittest.TestCase):
 
     def test_relevance_classifier_can_trigger_response(self) -> None:
         tmp, db, _memory, violet = self.make_agent(
-            [{"message": {"role": "assistant", "content": "yes"}}]
+            [
+                {
+                    "message": {
+                        "role": "assistant",
+                        "content": '{"response": "yes", "explanation": "relevant"}',
+                    }
+                }
+            ]
         )
         self.addCleanup(tmp.cleanup)
         self.addCleanup(db.close)
@@ -88,6 +95,7 @@ class AgentTest(unittest.TestCase):
         self.assertTrue(
             self.run_async(violet.should_respond("can the bot do this?", "guild", False, False))
         )
+        self.assertEqual(violet.llm_client.calls[0]["model"], "qwen2.5:0.5b")
 
     def test_denies_non_owner_terminal_and_logs(self) -> None:
         tmp, db, _memory, violet = self.make_agent([])
@@ -157,10 +165,11 @@ class AgentTest(unittest.TestCase):
         response = self.run_async(violet.generate(request))
 
         self.assertEqual(response.text, "done")
-        self.assertEqual(memory.window("guild")[-1]["content"], "done")
+        self.assertEqual(memory.window("guild"), [])
         row = db._conn.execute("SELECT status, tool FROM tool_calls").fetchone()
         self.assertEqual(row["status"], "success")
         self.assertEqual(row["tool"], "http_get")
+        self.assertEqual(violet.llm_client.calls[0]["model"], "qwen2.5:0.5b")
 
     def test_generate_logs_empty_model_response(self) -> None:
         tmp, db, _memory, violet = self.make_agent(
@@ -189,6 +198,58 @@ class AgentTest(unittest.TestCase):
         logs = "\n".join(captured.output)
         self.assertIn("model_response stage=generate", logs)
         self.assertIn("content_len=0", logs)
+
+    def test_build_messages_uses_snapshot_roles(self) -> None:
+        tmp, db, _memory, violet = self.make_agent([])
+        self.addCleanup(tmp.cleanup)
+        self.addCleanup(db.close)
+
+        request = AgentRequest(
+            content="hello",
+            author_name="Owner",
+            author_id="1",
+            context_key="guild",
+            channel_name="general",
+            guild_id="guild",
+            server_name="Server",
+            context_snapshot=[
+                {
+                    "role": "user",
+                    "channel": "general",
+                    "author": "Alex",
+                    "author_id": "2",
+                    "content": "hi",
+                    "ts": 1,
+                },
+                {
+                    "role": "assistant",
+                    "channel": "general",
+                    "author": "Violet",
+                    "author_id": "assistant",
+                    "content": "hello",
+                    "ts": 2,
+                },
+            ],
+        )
+
+        messages = violet._build_messages(request, "casual", request.context_snapshot)
+
+        self.assertEqual(messages[1]["role"], "user")
+        self.assertEqual(messages[1]["content"], "[#general] Alex: hi")
+        self.assertEqual(messages[2]["role"], "assistant")
+        self.assertEqual(messages[2]["content"], "hello")
+
+    def test_repeating_response_detection_requires_three_prior_matches(self) -> None:
+        tmp, db, memory, violet = self.make_agent([])
+        self.addCleanup(tmp.cleanup)
+        self.addCleanup(db.close)
+
+        memory.append_assistant("guild", "general", "chemistry!", persist=False)
+        memory.append_assistant("guild", "general", "chemistry.", persist=False)
+        memory.append_assistant("guild", "general", "chemistry", persist=False)
+
+        self.assertTrue(violet.is_repeating_response("guild", "Chemistry"))
+        self.assertFalse(violet.is_repeating_response("guild", "biology"))
 
     def test_load_settings_reads_log_level(self) -> None:
         original = os.environ.get("LOG_LEVEL")
