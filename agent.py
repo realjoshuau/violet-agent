@@ -53,16 +53,16 @@ class AgentResponse:
     attachments: list[Attachment] = field(default_factory=list)
 
 
-class OllamaChatClient:
-    def __init__(self, base_url: str) -> None:
+class OpenAIChatClient:
+    def __init__(self, base_url: str, api_key: str | None = None) -> None:
         try:
-            from ollama import AsyncClient
+            from openai import AsyncOpenAI
         except ModuleNotFoundError as exc:
-            raise RuntimeError("Install the `ollama` Python package to run Violet.") from exc
-        self.client = AsyncClient(host=base_url)
+            raise RuntimeError("Install the `openai` Python package to run Violet.") from exc
+        self.client = AsyncOpenAI(base_url=base_url, api_key=api_key or "none")
 
     async def chat(self, **kwargs: Any) -> Any:
-        return await self.client.chat(**kwargs)
+        return await self.client.chat.completions.create(**kwargs)
 
 
 class VioletAgent:
@@ -78,7 +78,7 @@ class VioletAgent:
         self.people = people
         self.db = db
         self.config = config
-        self.llm_client = llm_client or OllamaChatClient(config.ollama_base_url)
+        self.llm_client = llm_client or OpenAIChatClient(config.ollama_base_url)
 
     async def should_respond(
         self,
@@ -114,16 +114,18 @@ class VioletAgent:
             messages.append(self._normalise_message(message))
             for tool_call in tool_calls:
                 tool_name, arguments = self._tool_call_parts(tool_call)
+                tool_call_id = self._tool_call_id(tool_call)
                 result_text, attachment = await self._execute_tool(tool_name, arguments, request)
                 if attachment:
                     attachments.append(attachment)
-                messages.append(
-                    {
-                        "role": "tool",
-                        "name": tool_name,
-                        "content": result_text,
-                    }
-                )
+                tool_message = {
+                    "role": "tool",
+                    "name": tool_name,
+                    "content": result_text,
+                }
+                if tool_call_id:
+                    tool_message["tool_call_id"] = tool_call_id
+                messages.append(tool_message)
             response = await self._chat(messages, tools=TOOL_DEFINITIONS, max_tokens=self._max_tokens(depth))
             self._log_model_response("tool_followup", response)
 
@@ -428,7 +430,7 @@ Do not include [#<channel>] or Author: in your response - those are just part of
         kwargs: dict[str, Any] = {
             "model": model or self.config.ollama_model,
             "messages": messages,
-            "options": {"num_predict": max_tokens},
+            "max_tokens": max_tokens,
         }
         if model and model != self.config.ollama_model:
             log.info("Overriding model for this response: %s (default is %s)", model, self.config.ollama_model)
@@ -475,7 +477,11 @@ Do not include [#<channel>] or Author: in your response - those are just part of
     @staticmethod
     def _response_message(response: Any) -> Any:
         if isinstance(response, dict):
-            return response.get("message", {})
+            choice = (response.get("choices") or [{}])[0]
+            return choice.get("message", response.get("message", {}))
+        choices = getattr(response, "choices", None)
+        if choices:
+            return getattr(choices[0], "message", choices[0])
         return getattr(response, "message", response)
 
     @staticmethod
@@ -522,6 +528,12 @@ Do not include [#<channel>] or Author: in your response - those are just part of
         else:
             arguments = dict(raw_arguments or {})
         return str(name), arguments
+
+    @staticmethod
+    def _tool_call_id(tool_call: Any) -> str:
+        if isinstance(tool_call, dict):
+            return str(tool_call.get("id") or "")
+        return str(getattr(tool_call, "id", "") or "")
 
     def _log_model_response(self, stage: str, response: Any) -> None:
         message = self._response_message(response)

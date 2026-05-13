@@ -18,6 +18,8 @@ people:
     name: "Alex"
     notes: |
       Likes short answers.
+    voice: |
+      Answer as Discord ID 123 with short answers.
 """,
                 encoding="utf-8",
             )
@@ -26,3 +28,5 @@ people:
             self.assertIn("Alex", store.notes_for("123"))
             self.assertIn("Likes short answers.", store.notes_for("123"))
             self.assertEqual(store.notes_for("missing"), "")
+            self.assertIn("Answer as Discord ID 123", store.voice_for("123"))
+            self.assertEqual(store.voice_for("missing"), "")

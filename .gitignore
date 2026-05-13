@@ -11,3 +11,4 @@ __pycache__/
 .venv/
 scripts/temp.txt
 multimodel.md
+personas/people-legacy.yaml

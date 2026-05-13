@@ -24,6 +24,7 @@ class PeopleStore:
             people[discord_id] = {
                 "name": str(entry.get("name", "")).strip(),
                 "notes": str(entry.get("notes", "")).strip(),
+                "voice": str(entry.get("voice", "")).strip(),
             }
         return cls(people)
 
@@ -36,3 +37,9 @@ class PeopleStore:
         if name and notes:
             return f"{name}: {notes}"
         return notes or name
+
+    def voice_for(self, discord_id: int | str) -> str:
+        person = self.people.get(str(discord_id))
+        if not person:
+            return ""
+        return str(person.get("voice") or "").strip()

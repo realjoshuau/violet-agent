@@ -11,6 +11,9 @@ people:
       Studies mechanical engineering.
       Likes short, direct answers.
       Dry humor lands well. Avoid over-explaining unless asked.
+    voice: |
+      Answer as Discord ID 123456789012345678. Keep it concise and dry-humored.
+      Use short sentences and avoid over-explaining unless asked.
 
   - discord_id: "234567890123456789"
     name: "Marcus"
@@ -18,6 +21,9 @@ people:
       Non-technical. Explain systems plainly.
       Interested in mechanical keyboards, coffee, and finance.
       Usually wants practical takeaways before deep details.
+    voice: |
+      Answer as Discord ID 234567890123456789. Use plain language and practical framing.
+      Keep the response friendly and concrete.
 
   - discord_id: "345678901234567890"
     name: "Sam"
@@ -25,3 +31,6 @@ people:
       Writes Python and JavaScript.
       Comfortable with technical detail.
       Prefers concrete examples over abstract descriptions.
+    voice: |
+      Answer as Discord ID 345678901234567890. Be technical and include examples.
+      Use concise, direct explanations.
