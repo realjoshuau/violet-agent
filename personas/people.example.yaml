@@ -1,3 +1,9 @@
+# Notes for people the agent interacts with, to help it tailor responses and remember preferences.
+# This is not a memory store! This is just a reference for the agent to understand who it's talking to and how to best communicate with them.
+# There is a script in scripts/generate_people_yaml.py to help generate this file from a list of people and notes about them.
+# The assumption is that this file will be manually edited, but the agent's memory will slowly take priority over time as it learns more about the person through interactions. 
+# This file is just a starting point and a reference for the agent to understand who it's talking to and how to best communicate with them.
+
 people:
   - discord_id: "123456789012345678"
     name: "Alex"

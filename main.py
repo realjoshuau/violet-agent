@@ -3,11 +3,14 @@ from __future__ import annotations
 import asyncio
 import io
 import logging
+import time
 from collections import defaultdict
 
 from agent import AgentRequest, VioletAgent
 from config import settings
 from memory import MemoryStore, context_key_for_dm, context_key_for_guild
+from metrics import MetricsCollector, MessageSnapshot
+from observability import run_observability_server
 from personas import PeopleStore
 from storage import Database
 
@@ -43,6 +46,7 @@ def build_client():
     memory = MemoryStore(db, settings.context_token_budget)
     people = PeopleStore.load(settings.people_path)
     violet = VioletAgent(memory=memory, people=people, db=db, config=settings)
+    metrics = MetricsCollector()
     server_queues = defaultdict(asyncio.Queue)
     active_workers: set[str] = set()
     worker_lock = asyncio.Lock()
@@ -51,6 +55,7 @@ def build_client():
     async def on_ready():
         guild_names = ", ".join(guild.name for guild in client.guilds)
         log.info("Connected as %s. Guilds: %s", client.user, guild_names or "none")
+        log.info("Observability dashboard at http://127.0.0.1:8765")
 
     async def handle_message(message, is_dm: bool) -> None:
         author_id = str(message.author.id)
@@ -149,19 +154,39 @@ def build_client():
 
     async def guild_worker(context_key: str) -> None:
         queue = server_queues[context_key]
+        metrics.set_worker_active(context_key, True)
         while True:
             message = await queue.get()
             try:
+                # Create a snapshot of the message for metrics
+                msg_snapshot = MessageSnapshot(
+                    author=message.author.display_name,
+                    author_id=str(message.author.id),
+                    author_avatar_url=message.author.display_avatar.url,
+                    content=message.content[:100],  # Truncate for display
+                    channel=message.channel.name,
+                    message_id=str(message.id),
+                    created_at=message.created_at.timestamp(),
+                    enqueued_at=time.time(),
+                )
+                metrics.start_processing(context_key, msg_snapshot)
+                
                 await handle_message(message, is_dm=False)
+                
+                metrics.finish_processing(context_key)
             except Exception:
                 log.exception("Failed to process queued guild message for context %s", context_key)
+                metrics.finish_processing(context_key)
             finally:
                 queue.task_done()
+                # Update queue size after processing
+                metrics.update_queue_size(context_key, queue.qsize())
 
             await asyncio.sleep(0.5)
 
             async with worker_lock:
                 if queue.empty():
+                    metrics.set_worker_active(context_key, False)
                     active_workers.discard(context_key)
                     return
 
@@ -188,19 +213,38 @@ def build_client():
             return
 
         context_key = context_key_for_guild(message.guild.id)
+        
+        # Create a message snapshot for metrics
+        msg_snapshot = MessageSnapshot(
+            author=message.author.display_name,
+            author_id=str(message.author.id),
+            author_avatar_url=message.author.display_avatar.url,
+            content=message.content[:100],  # Truncate for display
+            channel=message.channel.name,
+            message_id=str(message.id),
+            created_at=message.created_at.timestamp(),
+            enqueued_at=time.time(),
+        )
+        metrics.enqueue_message(context_key, msg_snapshot)
+        
         async with worker_lock:
             await server_queues[context_key].put(message)
+            metrics.update_queue_size(context_key, server_queues[context_key].qsize())
             if context_key not in active_workers:
                 active_workers.add(context_key)
                 asyncio.create_task(guild_worker(context_key))
 
-    return client
+    return client, metrics
 
 
 async def main() -> None:
     if not settings.discord_bot_token:
         raise RuntimeError("DISCORD_BOT_TOKEN is required.")
-    client = build_client()
+    client, metrics = build_client()
+    
+    # Start observability server in background
+    asyncio.create_task(run_observability_server(metrics))
+    
     await client.start(settings.discord_bot_token)
 
 
