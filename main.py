@@ -95,7 +95,7 @@ def build_client():
             response = await violet.generate(
                 AgentRequest(
                     content=message.content,
-                    author_name=message.author.display_name,
+                    author_name=message.author.id,
                     author_id=author_id,
                     context_key=context_key,
                     channel_name=channel_name,
@@ -110,7 +110,7 @@ def build_client():
                 response = await violet.generate(
                     AgentRequest(
                         content=message.content,
-                        author_name=message.author.display_name,
+                        author_name=message.author.id,
                         author_id=author_id,
                         context_key=context_key,
                         channel_name=channel_name,

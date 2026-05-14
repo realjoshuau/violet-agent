@@ -22,7 +22,7 @@ class ToolContext:
 
 
 TOOLS: dict[str, ToolCallable] = {
-    "execute": terminal.execute,
+    #"execute": terminal.execute,
     "screenshot": browser.screenshot,
     "send_email": email_tool.send,
     "http_get": network.get,
@@ -34,21 +34,21 @@ OWNER_ONLY_TOOLS = {"execute"}
 
 
 TOOL_DEFINITIONS: list[dict[str, Any]] = [
-    {
-        "type": "function",
-        "function": {
-            "name": "execute",
-            "description": "Run a shell command on the host. Owner only.",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "command": {"type": "string"},
-                    "timeout": {"type": "integer", "default": 30},
-                },
-                "required": ["command"],
-            },
-        },
-    },
+    # {
+    #     "type": "function",
+    #     "function": {
+    #         "name": "execute",
+    #         "description": "Run a shell command on the host. Owner only.",
+    #         "parameters": {
+    #             "type": "object",
+    #             "properties": {
+    #                 "command": {"type": "string"},
+    #                 "timeout": {"type": "integer", "default": 30},
+    #             },
+    #             "required": ["command"],
+    #         },
+    #     },
+    # },
     {
         "type": "function",
         "function": {

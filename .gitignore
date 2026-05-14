@@ -12,3 +12,4 @@ __pycache__/
 scripts/temp.txt
 multimodel.md
 personas/people-legacy.yaml
+system-prompt.txt

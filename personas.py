@@ -8,6 +8,7 @@ import yaml
 class PeopleStore:
     def __init__(self, people: dict[str, dict[str, str]] | None = None) -> None:
         self.people = people or {}
+        self.raw = {"people": [{"discord_id": discord_id, **info} for discord_id, info in self.people.items()]}
 
     @classmethod
     def load(cls, path: str) -> "PeopleStore":
