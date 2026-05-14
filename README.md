@@ -3,6 +3,8 @@
 > [!NOTE]
 > This project is both in early development, a personal exercise, AND mostly AI-agent programmed. There are obvious risks in running code from an AI agent! The production deployment of this project is on a isolated machine with NO access to sensitive data.
 
+>[!CAUTION]
+> This project provides no guarantees of even working. This is a vibe-coded personal project for _fun_, and the code quality is significantly worse than a typical human project (and is not reflective of other projects). 
 
 Violet is a Discord AI agent backed by a local Ollama model. It keeps per-server context, can use tools, restricts terminal execution to the owner, and logs every tool attempt to SQLite. 
 
