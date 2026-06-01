@@ -6,6 +6,9 @@
 >[!CAUTION]
 > This project provides no guarantees of even working. This is a vibe-coded personal project for _fun_, and the code quality is significantly worse than a typical human project (and is not reflective of other projects). 
 
+>[!TIP]
+> This is not the latest version of the agent. The agent has extra features that are not merged upstream into this repository yet (mostly Discord-integration tools and some classification upgrades regarding emojis).
+
 Violet is a Discord AI agent backed by a local Ollama model. It keeps per-server context, can use tools, restricts terminal execution to the owner, and logs every tool attempt to SQLite. 
 
 ## Setup
